@@ -30,6 +30,7 @@ import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.NpcDespawned;
 import net.runelite.api.events.NpcSpawned;
 import net.runelite.api.events.StatChanged;
+import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
@@ -52,7 +53,6 @@ import net.runelite.client.util.Text;
 
 /*
  * TODO:
- *  - Read slayer partner from "partner" option on slayer gem
  *  - Unset partnerName when no longer doing partner slayer
  */
 
@@ -73,6 +73,8 @@ public class PartnerSlayerPlugin extends Plugin {
           Pattern.compile("(.*) has been assigned to slay"));
   private static final Pattern TASK_COMPLETE_PATTERN =
       Pattern.compile("you've completed \\d+ task");
+  private static final Pattern WIDGET_PARTNER_NAME_PATTERN =
+      Pattern.compile("Current partner: <col=ffffff>([^<]*)</col> \\(Kills: (\\d+)\\)");
 
   @Getter @Inject private Client client;
   @Getter @Inject private ClientThread clientThread;
@@ -106,8 +108,6 @@ public class PartnerSlayerPlugin extends Plugin {
 
     if (configManager.getRSProfileKey() != null) {
       load(configManager.getRSProfileKey());
-    } else {
-      log.info("profile key null");
     }
   }
 
@@ -384,8 +384,37 @@ public class PartnerSlayerPlugin extends Plugin {
     partyService.send(new PartnerSlayerXPUpdate(slayerTask.getOwnXP()));
   }
 
+  private void updateFromWidget() {
+    var widget = client.getWidget(InterfaceID.SlayerPartner.NAME);
+    if (widget == null) {
+      return;
+    }
+
+    var widgetText = widget.getText();
+    if (widgetText == null) {
+      return;
+    }
+
+    var matcher = WIDGET_PARTNER_NAME_PATTERN.matcher(widgetText);
+    if (!matcher.find()) {
+      return;
+    }
+
+    var name = matcher.group(1);
+    if (name != null && !name.isEmpty()) {
+      setPartnerName(name);
+    }
+
+    var killsString = matcher.group(2);
+    if (killsString != null && slayerTask != null) {
+      slayerTask.setPartnerKills(Integer.parseInt(killsString));
+    }
+  }
+
   @Subscribe
   public void onGameTick(GameTick gameTick) {
+    updateFromWidget();
+
     shareLocation();
     updateTask();
 
@@ -433,10 +462,6 @@ public class PartnerSlayerPlugin extends Plugin {
     }
 
     if (partyService.isInParty()) {
-      if (partyService.getMemberByDisplayName(partnerName) != null) {
-        return;
-      }
-
       client.addChatMessage(
           ChatMessageType.GAMEMESSAGE,
           "",
