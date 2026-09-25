@@ -1,9 +1,10 @@
 package dev.thource.runelite.partnerslayer;
 
 import com.google.inject.Provides;
+import dev.thource.runelite.partnerslayer.party.PartnerSlayerKillsUpdate;
 import dev.thource.runelite.partnerslayer.party.PartnerSlayerLocationUpdate;
 import dev.thource.runelite.partnerslayer.party.PartnerSlayerNameUpdate;
-import dev.thource.runelite.partnerslayer.party.PartnerSlayerKillsUpdate;
+import dev.thource.runelite.partnerslayer.party.PartnerSlayerXPUpdate;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
@@ -18,15 +19,17 @@ import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.NPC;
+import net.runelite.api.Skill;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.CommandExecuted;
+import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.NpcDespawned;
 import net.runelite.api.events.NpcSpawned;
-import net.runelite.api.events.VarbitChanged;
+import net.runelite.api.events.StatChanged;
 import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
@@ -45,6 +48,16 @@ import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.plugins.slayer.SlayerPlugin;
 import net.runelite.client.plugins.slayer.SlayerPluginService;
 import net.runelite.client.ui.overlay.OverlayManager;
+
+/*
+ * TODO:
+ *  - Config options
+ *  - Read slayer partner from "partner" option on slayer gem
+ *  - Add chat message after task completed: "Kills: {}, XP gained: {} - Partner kills: {}, Partner XP gained: {}"
+ *  - Warning text that partner isn't connected (e.g. not in party, not using plugin, etc.)
+ *  - Show different world for distance
+ *  - Only show the overlay after receiving a new task or when near slayer task monsters (5 min timeout)
+ */
 
 /**
  * PartnerSlayerPlugin is a RuneLite plugin designed to enhance the experience of partner slayer.
@@ -80,6 +93,7 @@ public class PartnerSlayerPlugin extends Plugin {
   private WorldPoint lastOwnWorldPoint;
   private final HashSet<Integer> lastOwnPositiveHitsplatMap = new HashSet<>();
   private String rsProfileKey;
+  private int slayerXp = -1;
 
   @Override
   protected void startUp() {
@@ -112,48 +126,119 @@ public class PartnerSlayerPlugin extends Plugin {
       return;
     }
 
-    configManager.setConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "partnerName", partnerName);
+    configManager.setConfiguration(
+        PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "partnerName", partnerName);
 
     if (slayerTask != null) {
       configManager.setConfiguration(
           PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskName", slayerTask.getTaskName());
       configManager.setConfiguration(
-          PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskInitialAmount", slayerTask.getInitialAmount());
+          PartnerSlayerConfig.CONFIG_GROUP,
+          rsProfileKey,
+          "taskInitialAmount",
+          slayerTask.getInitialAmount());
       configManager.setConfiguration(
           PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskOwnKills", slayerTask.getOwnKills());
       configManager.setConfiguration(
-          PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskPartnerKills", slayerTask.getPartnerKills());
+          PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskOwnXP", slayerTask.getOwnXP());
+      configManager.setConfiguration(
+          PartnerSlayerConfig.CONFIG_GROUP,
+          rsProfileKey,
+          "taskPartnerKills",
+          slayerTask.getPartnerKills());
+      configManager.setConfiguration(
+          PartnerSlayerConfig.CONFIG_GROUP,
+          rsProfileKey,
+          "taskPartnerXP",
+          slayerTask.getPartnerXP());
     } else {
       configManager.unsetConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskName");
-      configManager.unsetConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskInitialAmount");
-      configManager.unsetConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskOwnKills");
-      configManager.unsetConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskPartnerKills");
+      configManager.unsetConfiguration(
+          PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskInitialAmount");
+      configManager.unsetConfiguration(
+          PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskOwnKills");
+      configManager.unsetConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskOwnXP");
+      configManager.unsetConfiguration(
+          PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskPartnerKills");
+      configManager.unsetConfiguration(
+          PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskPartnerXP");
     }
   }
 
   private void load(String rsProfileKey) {
     this.rsProfileKey = rsProfileKey;
 
-    partnerName = configManager.getConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "partnerName");
+    partnerName =
+        configManager.getConfiguration(
+            PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "partnerName");
 
-    var taskName = configManager.getConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskName");
+    var taskName =
+        configManager.getConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskName");
     var taskInitialAmount =
-        configManager.getConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskInitialAmount");
+        configManager.getConfiguration(
+            PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskInitialAmount");
     var taskOwnKills =
-        configManager.getConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskOwnKills");
+        configManager.getConfiguration(
+            PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskOwnKills");
+    var taskOwnXP =
+        configManager.getConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskOwnXP");
     var taskPartnerKills =
-        configManager.getConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskPartnerKills");
+        configManager.getConfiguration(
+            PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskPartnerKills");
+    var taskPartnerXP =
+        configManager.getConfiguration(
+            PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskPartnerXP");
     if (taskName != null
         && taskInitialAmount != null
         && taskOwnKills != null
-        && taskPartnerKills != null) {
+        && taskOwnXP != null
+        && taskPartnerKills != null
+        && taskPartnerXP != null) {
       slayerTask =
           new SlayerTask(
               taskName,
               Integer.parseInt(taskInitialAmount),
               Integer.parseInt(taskOwnKills),
-              Integer.parseInt(taskPartnerKills));
+              Integer.parseInt(taskOwnXP),
+              Integer.parseInt(taskPartnerKills),
+              Integer.parseInt(taskPartnerXP));
     }
+  }
+
+  @Subscribe
+  void onGameStateChanged(GameStateChanged gameStateChanged) {
+    if (gameStateChanged.getGameState() == GameState.LOGGING_IN) {
+      slayerXp = -1;
+    }
+  }
+
+  @Subscribe
+  void onStatChanged(StatChanged statChanged) {
+    if (statChanged.getSkill() != Skill.SLAYER) {
+      return;
+    }
+
+    // if slayerXp is -1, this is the server sending us our total XP, so don't count it
+    if (slayerXp != -1) {
+      var xpDiff = statChanged.getXp() - slayerXp;
+
+      if (xpDiff > 0 && slayerTask != null) {
+        // TODO: also check not timed out
+        slayerTask.setOwnXP(slayerTask.getOwnXP() + xpDiff);
+        shareXp();
+      }
+    }
+
+    slayerXp = statChanged.getXp();
+  }
+
+  @Subscribe
+  void onPartnerSlayerXPUpdate(PartnerSlayerXPUpdate partnerSlayerXPUpdate) {
+    if (slayerTask == null) {
+      return;
+    }
+
+    slayerTask.setPartnerXP(partnerSlayerXPUpdate.getXp());
   }
 
   @Subscribe
@@ -195,7 +280,7 @@ public class PartnerSlayerPlugin extends Plugin {
             slayerPluginService.getInitialAmount());
         slayerTask =
             new SlayerTask(
-                slayerPluginService.getTask(), slayerPluginService.getInitialAmount(), 0, 0);
+                slayerPluginService.getTask(), slayerPluginService.getInitialAmount(), 0, 0, 0, 0);
       }
     }
   }
@@ -221,18 +306,13 @@ public class PartnerSlayerPlugin extends Plugin {
     var args = commandExecuted.getArguments();
 
     if (command.equals("setpartner")) {
-      log.info("Set partner command executed");
-
       if (args.length == 0) {
-        log.info("No name specified");
+        client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", "Setting slayer partner failed, no name specified.", null);
         return;
       }
 
-      var partnerName = Arrays.stream(args)
-          .filter(Objects::nonNull)
-          .collect(Collectors.joining(" "));
-      log.info("partnerName: {}", partnerName);
-
+      var partnerName =
+          Arrays.stream(args).filter(Objects::nonNull).collect(Collectors.joining(" "));
       setPartnerName(partnerName);
     }
   }
@@ -262,9 +342,15 @@ public class PartnerSlayerPlugin extends Plugin {
     }
 
     lastOwnWorldPoint = location;
+    partyService.send(new PartnerSlayerLocationUpdate(location));
+  }
 
-    final PartnerSlayerLocationUpdate partnerSlayerLocationUpdate = new PartnerSlayerLocationUpdate(location);
-    partyService.send(partnerSlayerLocationUpdate);
+  private void shareXp() {
+    if (slayerTask == null || !partyService.isInParty()) {
+      return;
+    }
+
+    partyService.send(new PartnerSlayerXPUpdate(slayerTask.getOwnXP()));
   }
 
   @Subscribe
@@ -407,7 +493,8 @@ public class PartnerSlayerPlugin extends Plugin {
   }
 
   @Subscribe
-  public void onPartnerSlayerLocationUpdate(PartnerSlayerLocationUpdate partnerSlayerLocationUpdate) {
+  public void onPartnerSlayerLocationUpdate(
+      PartnerSlayerLocationUpdate partnerSlayerLocationUpdate) {
     if (partnerSlayerLocationUpdate.getMemberId() != partnerMemberId) {
       return;
     }
