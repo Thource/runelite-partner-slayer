@@ -472,7 +472,7 @@ public class PartnerSlayerPlugin extends Plugin {
     }
 
     var partyPassword =
-        "PS/"
+        "PS-"
             + Stream.of(partnerName, client.getLocalPlayer().getName())
                 .filter(Objects::nonNull)
                 .sorted(String::compareTo)
