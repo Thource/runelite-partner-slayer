@@ -1,6 +1,10 @@
 package dev.thource.runelite.partnerslayer;
 
 import com.google.inject.Provides;
+import dev.thource.runelite.partnerslayer.party.PartnerSlayerLocationUpdate;
+import dev.thource.runelite.partnerslayer.party.PartnerSlayerNameUpdate;
+import dev.thource.runelite.partnerslayer.party.PartnerSlayerKillsUpdate;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
@@ -17,6 +21,7 @@ import net.runelite.api.NPC;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.ChatMessage;
+import net.runelite.api.events.CommandExecuted;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.NpcDespawned;
@@ -26,13 +31,17 @@ import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.ClientShutdown;
+import net.runelite.client.events.ConfigSync;
+import net.runelite.client.events.PartyChanged;
+import net.runelite.client.events.RuneScapeProfileChanged;
 import net.runelite.client.party.PartyService;
+import net.runelite.client.party.WSClient;
 import net.runelite.client.party.events.UserJoin;
 import net.runelite.client.party.events.UserPart;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDependency;
 import net.runelite.client.plugins.PluginDescriptor;
-import net.runelite.client.plugins.party.messages.LocationUpdate;
 import net.runelite.client.plugins.slayer.SlayerPlugin;
 import net.runelite.client.plugins.slayer.SlayerPluginService;
 import net.runelite.client.ui.overlay.OverlayManager;
@@ -59,6 +68,7 @@ public class PartnerSlayerPlugin extends Plugin {
   @Getter @Inject private OverlayManager overlayManager;
   @Getter @Inject private PartyService partyService;
   @Getter @Inject private SlayerPluginService slayerPluginService;
+  @Inject private WSClient wsClient;
 
   @Getter @Inject private PartnerSlayerConfig config;
   @Getter @Inject private PartnerSlayerOverlay partnerSlayerOverlay;
@@ -69,26 +79,70 @@ public class PartnerSlayerPlugin extends Plugin {
   private WorldPoint partnerWorldPoint;
   private WorldPoint lastOwnWorldPoint;
   private final HashSet<Integer> lastOwnPositiveHitsplatMap = new HashSet<>();
+  private String rsProfileKey;
 
   @Override
   protected void startUp() {
-    loadData();
+    wsClient.registerMessage(PartnerSlayerNameUpdate.class);
+    wsClient.registerMessage(PartnerSlayerLocationUpdate.class);
+    wsClient.registerMessage(PartnerSlayerKillsUpdate.class);
 
     overlayManager.add(partnerSlayerOverlay);
 
-    updateTask();
+    if (configManager.getRSProfileKey() != null) {
+      load(configManager.getRSProfileKey());
+    } else {
+      log.info("profile key null");
+    }
   }
 
-  private void loadData() {
-    partnerName = configManager.getConfiguration(PartnerSlayerConfig.CONFIG_GROUP, "partnerName");
+  @Override
+  protected void shutDown() {
+    overlayManager.remove(partnerSlayerOverlay);
 
-    var taskName = configManager.getConfiguration(PartnerSlayerConfig.CONFIG_GROUP, "taskName");
+    save();
+
+    wsClient.unregisterMessage(PartnerSlayerNameUpdate.class);
+    wsClient.unregisterMessage(PartnerSlayerLocationUpdate.class);
+    wsClient.unregisterMessage(PartnerSlayerKillsUpdate.class);
+  }
+
+  private void save() {
+    if (rsProfileKey == null) {
+      return;
+    }
+
+    configManager.setConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "partnerName", partnerName);
+
+    if (slayerTask != null) {
+      configManager.setConfiguration(
+          PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskName", slayerTask.getTaskName());
+      configManager.setConfiguration(
+          PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskInitialAmount", slayerTask.getInitialAmount());
+      configManager.setConfiguration(
+          PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskOwnKills", slayerTask.getOwnKills());
+      configManager.setConfiguration(
+          PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskPartnerKills", slayerTask.getPartnerKills());
+    } else {
+      configManager.unsetConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskName");
+      configManager.unsetConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskInitialAmount");
+      configManager.unsetConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskOwnKills");
+      configManager.unsetConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskPartnerKills");
+    }
+  }
+
+  private void load(String rsProfileKey) {
+    this.rsProfileKey = rsProfileKey;
+
+    partnerName = configManager.getConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "partnerName");
+
+    var taskName = configManager.getConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskName");
     var taskInitialAmount =
-        configManager.getConfiguration(PartnerSlayerConfig.CONFIG_GROUP, "taskInitialAmount");
+        configManager.getConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskInitialAmount");
     var taskOwnKills =
-        configManager.getConfiguration(PartnerSlayerConfig.CONFIG_GROUP, "taskOwnKills");
+        configManager.getConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskOwnKills");
     var taskPartnerKills =
-        configManager.getConfiguration(PartnerSlayerConfig.CONFIG_GROUP, "taskPartnerKills");
+        configManager.getConfiguration(PartnerSlayerConfig.CONFIG_GROUP, rsProfileKey, "taskPartnerKills");
     if (taskName != null
         && taskInitialAmount != null
         && taskOwnKills != null
@@ -102,31 +156,20 @@ public class PartnerSlayerPlugin extends Plugin {
     }
   }
 
-  @Override
-  protected void shutDown() {
-    overlayManager.remove(partnerSlayerOverlay);
-
-    saveData();
+  @Subscribe
+  void onRuneScapeProfileChanged(RuneScapeProfileChanged e) {
+    save();
+    load(configManager.getRSProfileKey());
   }
 
-  private void saveData() {
-    configManager.setConfiguration(PartnerSlayerConfig.CONFIG_GROUP, "partnerName", partnerName);
+  @Subscribe
+  public void onConfigSync(ConfigSync configSync) {
+    save();
+  }
 
-    if (slayerTask != null) {
-      configManager.setConfiguration(
-          PartnerSlayerConfig.CONFIG_GROUP, "taskName", slayerTask.getTaskName());
-      configManager.setConfiguration(
-          PartnerSlayerConfig.CONFIG_GROUP, "taskInitialAmount", slayerTask.getInitialAmount());
-      configManager.setConfiguration(
-          PartnerSlayerConfig.CONFIG_GROUP, "taskOwnKills", slayerTask.getOwnKills());
-      configManager.setConfiguration(
-          PartnerSlayerConfig.CONFIG_GROUP, "taskPartnerKills", slayerTask.getPartnerKills());
-    } else {
-      configManager.unsetConfiguration(PartnerSlayerConfig.CONFIG_GROUP, "taskName");
-      configManager.unsetConfiguration(PartnerSlayerConfig.CONFIG_GROUP, "taskInitialAmount");
-      configManager.unsetConfiguration(PartnerSlayerConfig.CONFIG_GROUP, "taskOwnKills");
-      configManager.unsetConfiguration(PartnerSlayerConfig.CONFIG_GROUP, "taskPartnerKills");
-    }
+  @Subscribe
+  public void onClientShutdown(ClientShutdown clientShutdown) {
+    save();
   }
 
   private void updateTask() {
@@ -141,28 +184,20 @@ public class PartnerSlayerPlugin extends Plugin {
     }
 
     if (slayerTask == null
-        || !slayerTask.getTaskName().equals(slayerPluginService.getTask())
-        || slayerTask.getInitialAmount() != slayerPluginService.getInitialAmount()) {
-      // Slayer task must have changed, reset it
-      log.info(
-          "Setting slayer task, task: {}, initialAmount: {}",
-          slayerPluginService.getTask(),
-          slayerPluginService.getInitialAmount());
-      slayerTask =
-          new SlayerTask(
-              slayerPluginService.getTask(), slayerPluginService.getInitialAmount(), 0, 0);
+        || slayerTask.getInitialAmount() != slayerPluginService.getInitialAmount()
+        || slayerTask.getTaskName() == null
+        || !slayerTask.getTaskName().equals(slayerPluginService.getTask())) {
+      if (slayerPluginService.getTask() != null) {
+        // Slayer task must have changed, reset it
+        log.info(
+            "Setting slayer task, task: {}, initialAmount: {}",
+            slayerPluginService.getTask(),
+            slayerPluginService.getInitialAmount());
+        slayerTask =
+            new SlayerTask(
+                slayerPluginService.getTask(), slayerPluginService.getInitialAmount(), 0, 0);
+      }
     }
-  }
-
-  // Low priority so that the slayer plugin has chance to update the task first
-  @Subscribe(priority = -1)
-  public void onVarbitChanged(VarbitChanged varbitChanged) {
-    if (varbitChanged.getVarpId() != VarPlayerID.SLAYER_TARGET
-        && varbitChanged.getVarpId() != VarPlayerID.SLAYER_COUNT_ORIGINAL) {
-      return;
-    }
-
-    clientThread.invokeLater(this::updateTask);
   }
 
   @Subscribe
@@ -178,6 +213,38 @@ public class PartnerSlayerPlugin extends Plugin {
         return;
       }
     }
+  }
+
+  @Subscribe
+  public void onCommandExecuted(CommandExecuted commandExecuted) {
+    var command = commandExecuted.getCommand();
+    var args = commandExecuted.getArguments();
+
+    if (command.equals("setpartner")) {
+      log.info("Set partner command executed");
+
+      if (args.length == 0) {
+        log.info("No name specified");
+        return;
+      }
+
+      var partnerName = Arrays.stream(args)
+          .filter(Objects::nonNull)
+          .collect(Collectors.joining(" "));
+      log.info("partnerName: {}", partnerName);
+
+      setPartnerName(partnerName);
+    }
+  }
+
+  private void shareName() {
+    if (client.getGameState() != GameState.LOGGED_IN
+        || client.getLocalPlayer() == null
+        || !partyService.isInParty()) {
+      return;
+    }
+
+    partyService.send(new PartnerSlayerNameUpdate(client.getLocalPlayer().getName()));
   }
 
   private void shareLocation() {
@@ -196,13 +263,14 @@ public class PartnerSlayerPlugin extends Plugin {
 
     lastOwnWorldPoint = location;
 
-    final LocationUpdate locationUpdate = new LocationUpdate(location);
-    partyService.send(locationUpdate);
+    final PartnerSlayerLocationUpdate partnerSlayerLocationUpdate = new PartnerSlayerLocationUpdate(location);
+    partyService.send(partnerSlayerLocationUpdate);
   }
 
   @Subscribe
   public void onGameTick(GameTick gameTick) {
     shareLocation();
+    updateTask();
   }
 
   private void joinParty() {
@@ -282,7 +350,6 @@ public class PartnerSlayerPlugin extends Plugin {
 
     if (weKilledIt((NPC) actorDeath.getActor())) {
       incrementOwnKills();
-      slayerTask.setOwnKills(slayerTask.getOwnKills() + 1);
     }
   }
 
@@ -294,7 +361,7 @@ public class PartnerSlayerPlugin extends Plugin {
     slayerTask.setOwnKills(slayerTask.getOwnKills() + 1);
 
     if (partyService.isInParty()) {
-      partyService.send(new SlayerTaskKillsUpdate(slayerTask.getOwnKills()));
+      partyService.send(new PartnerSlayerKillsUpdate(slayerTask.getOwnKills()));
     }
   }
 
@@ -303,19 +370,22 @@ public class PartnerSlayerPlugin extends Plugin {
   }
 
   @Subscribe
-  public void onUserJoin(UserJoin userJoin) {
-    var partyMember = partyService.getMemberById(userJoin.getMemberId());
-    if (partyMember.getDisplayName().equals(partnerName)) {
-      log.info("Partner {} has joined the party.", partnerName);
+  public void onPartyChanged(PartyChanged partyChanged) {
+    log.info("Party changed.");
+    shareName();
+    shareLocation();
+  }
 
-      partnerMemberId = userJoin.getMemberId();
-    }
+  @Subscribe
+  public void onUserJoin(UserJoin userJoin) {
+    log.info("User {} has joined the party.", userJoin.getMemberId());
+    shareName();
+    shareLocation();
   }
 
   @Subscribe
   public void onUserPart(UserPart userPart) {
-    var partyMember = partyService.getMemberById(userPart.getMemberId());
-    if (partyMember.getDisplayName().equals(partnerName)) {
+    if (userPart.getMemberId() == partnerMemberId) {
       log.info("Partner {} has left the party.", partnerName);
 
       partnerMemberId = -1;
@@ -324,21 +394,34 @@ public class PartnerSlayerPlugin extends Plugin {
   }
 
   @Subscribe
-  public void onLocationUpdate(LocationUpdate locationUpdate) {
-    if (locationUpdate.getMemberId() != partnerMemberId) {
+  public void onPartnerSlayerNameUpdate(PartnerSlayerNameUpdate partnerSlayerNameUpdate) {
+    var memberId = partnerSlayerNameUpdate.getMemberId();
+    var name = partnerSlayerNameUpdate.getName();
+
+    log.info("Received name update from {}: {}", name, memberId);
+    if (partnerMemberId != -1 || name == null || !name.equals(partnerName)) {
       return;
     }
 
-    partnerWorldPoint = locationUpdate.getWorldPoint();
+    partnerMemberId = memberId;
   }
 
   @Subscribe
-  public void onSlayerTaskKillsUpdate(SlayerTaskKillsUpdate slayerTaskKillsUpdate) {
-    if (slayerTaskKillsUpdate.getMemberId() != partnerMemberId || slayerTask == null) {
+  public void onPartnerSlayerLocationUpdate(PartnerSlayerLocationUpdate partnerSlayerLocationUpdate) {
+    if (partnerSlayerLocationUpdate.getMemberId() != partnerMemberId) {
       return;
     }
 
-    slayerTask.setPartnerKills(slayerTaskKillsUpdate.getKills());
+    partnerWorldPoint = partnerSlayerLocationUpdate.getWorldPoint();
+  }
+
+  @Subscribe
+  public void onPartnerSlayerKillsUpdate(PartnerSlayerKillsUpdate partnerSlayerKillsUpdate) {
+    if (partnerSlayerKillsUpdate.getMemberId() != partnerMemberId || slayerTask == null) {
+      return;
+    }
+
+    slayerTask.setPartnerKills(partnerSlayerKillsUpdate.getKills());
   }
 
   public int getPartnerDistance() {
