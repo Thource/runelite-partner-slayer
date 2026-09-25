@@ -48,12 +48,12 @@ import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.plugins.slayer.SlayerPlugin;
 import net.runelite.client.plugins.slayer.SlayerPluginService;
 import net.runelite.client.ui.overlay.OverlayManager;
+import net.runelite.client.util.Text;
 
 /*
  * TODO:
  *  - Config options
  *  - Read slayer partner from "partner" option on slayer gem
- *  - Add chat message after task completed: "Kills: {}, XP gained: {} - Partner kills: {}, Partner XP gained: {}"
  *  - Only show the overlay after receiving a new task or when near slayer task monsters (5 min timeout)
  */
 
@@ -72,6 +72,8 @@ public class PartnerSlayerPlugin extends Plugin {
       List.of(
           Pattern.compile("You have received a new Slayer assignment from ([^:]*):"),
           Pattern.compile("(.*) has been assigned to slay"));
+  private static final Pattern TASK_COMPLETE_PATTERN =
+      Pattern.compile("you've completed \\d+ task");
 
   @Getter @Inject private Client client;
   @Getter @Inject private ClientThread clientThread;
@@ -85,6 +87,7 @@ public class PartnerSlayerPlugin extends Plugin {
   @Getter @Inject private PartnerSlayerOverlay partnerSlayerOverlay;
 
   @Getter private SlayerTask slayerTask;
+  private SlayerTask lastSlayerTask;
   @Getter private String partnerName;
   @Getter private long partnerMemberId = -1L;
   private WorldPoint partnerWorldPoint;
@@ -261,8 +264,12 @@ public class PartnerSlayerPlugin extends Plugin {
     }
 
     if (client.getVarpValue(VarPlayerID.SLAYER_TARGET) == 0) {
-      // Slayer task completed, set to null
-      slayerTask = null;
+      if (slayerTask != null) {
+        lastSlayerTask = slayerTask;
+        // Slayer task completed, set to null
+        slayerTask = null;
+      }
+
       return;
     }
 
@@ -296,6 +303,26 @@ public class PartnerSlayerPlugin extends Plugin {
         return;
       }
     }
+
+    if (lastSlayerTask != null) {
+      var strippedText = Text.standardize(chatMessage.getMessage());
+      var taskCompleteMatcher = TASK_COMPLETE_PATTERN.matcher(strippedText);
+
+      if (taskCompleteMatcher.find()) {
+        client.addChatMessage(
+            ChatMessageType.GAMEMESSAGE,
+            "",
+            "Kills: "
+                + lastSlayerTask.getOwnKills()
+                + ", XP gained: "
+                + lastSlayerTask.getOwnXP()
+                + " - Partner kills: "
+                + lastSlayerTask.getPartnerKills()
+                + ", Partner XP gained: "
+                + lastSlayerTask.getPartnerXP(),
+            null);
+      }
+    }
   }
 
   @Subscribe
@@ -305,7 +332,11 @@ public class PartnerSlayerPlugin extends Plugin {
 
     if (command.equals("setpartner")) {
       if (args.length == 0) {
-        client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", "Setting slayer partner failed, no name specified.", null);
+        client.addChatMessage(
+            ChatMessageType.GAMEMESSAGE,
+            "",
+            "Setting slayer partner failed, no name specified.",
+            null);
         return;
       }
 
