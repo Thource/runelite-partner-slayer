@@ -100,6 +100,16 @@ public class PartnerSlayerOverlay extends OverlayPanel {
                 .rightColor(partnerDistanceColor)
                 .build());
 
+    if (plugin.getPartnerMemberId() == -1L) {
+      panelComponent
+          .getChildren()
+          .add(
+              LineComponent.builder()
+                  .left("Not connected, ensure partner is in your party and has the plugin.")
+                  .leftColor(Color.RED)
+                  .build());
+    }
+
     return super.render(graphics);
   }
 }

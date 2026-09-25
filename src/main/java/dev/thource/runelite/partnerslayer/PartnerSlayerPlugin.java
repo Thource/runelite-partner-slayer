@@ -54,8 +54,6 @@ import net.runelite.client.ui.overlay.OverlayManager;
  *  - Config options
  *  - Read slayer partner from "partner" option on slayer gem
  *  - Add chat message after task completed: "Kills: {}, XP gained: {} - Partner kills: {}, Partner XP gained: {}"
- *  - Warning text that partner isn't connected (e.g. not in party, not using plugin, etc.)
- *  - Show different world for distance
  *  - Only show the overlay after receiving a new task or when near slayer task monsters (5 min timeout)
  */
 
@@ -88,7 +86,7 @@ public class PartnerSlayerPlugin extends Plugin {
 
   @Getter private SlayerTask slayerTask;
   @Getter private String partnerName;
-  private long partnerMemberId = -1L;
+  @Getter private long partnerMemberId = -1L;
   private WorldPoint partnerWorldPoint;
   private WorldPoint lastOwnWorldPoint;
   private final HashSet<Integer> lastOwnPositiveHitsplatMap = new HashSet<>();
@@ -330,7 +328,7 @@ public class PartnerSlayerPlugin extends Plugin {
   private void shareLocation() {
     if (client.getGameState() != GameState.LOGGED_IN
         || client.getLocalPlayer() == null
-        || partnerMemberId == -1
+        || partnerMemberId == -1L
         || !partyService.isInParty()
         || slayerTask == null) {
       return;
@@ -360,7 +358,7 @@ public class PartnerSlayerPlugin extends Plugin {
   }
 
   private void joinParty() {
-    if (partnerMemberId != -1) {
+    if (partnerMemberId != -1L) {
       return;
     }
 
@@ -474,7 +472,7 @@ public class PartnerSlayerPlugin extends Plugin {
     if (userPart.getMemberId() == partnerMemberId) {
       log.info("Partner {} has left the party.", partnerName);
 
-      partnerMemberId = -1;
+      partnerMemberId = -1L;
       partnerWorldPoint = null;
     }
   }
@@ -485,7 +483,7 @@ public class PartnerSlayerPlugin extends Plugin {
     var name = partnerSlayerNameUpdate.getName();
 
     log.info("Received name update from {}: {}", name, memberId);
-    if (partnerMemberId != -1 || name == null || !name.equals(partnerName)) {
+    if (partnerMemberId != -1L || name == null || !name.equals(partnerName)) {
       return;
     }
 
