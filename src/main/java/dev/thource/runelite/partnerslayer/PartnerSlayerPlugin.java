@@ -476,7 +476,7 @@ public class PartnerSlayerPlugin extends Plugin {
             + Stream.of(partnerName, client.getLocalPlayer().getName())
                 .filter(Objects::nonNull)
                 .sorted(String::compareTo)
-                .collect(Collectors.joining("/"));
+                .collect(Collectors.joining("-"));
 
     partyService.changeParty(partyPassword);
     client.addChatMessage(
