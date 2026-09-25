@@ -54,7 +54,7 @@ import net.runelite.client.util.Text;
  * TODO:
  *  - Config options
  *  - Read slayer partner from "partner" option on slayer gem
- *  - Only show the overlay after receiving a new task or when near slayer task monsters (5 min timeout)
+ *  - Unset partnerName when no longer doing partner slayer
  */
 
 /**
@@ -95,14 +95,15 @@ public class PartnerSlayerPlugin extends Plugin {
   private final HashSet<Integer> lastOwnPositiveHitsplatMap = new HashSet<>();
   private String rsProfileKey;
   private int slayerXp = -1;
+  private long lastActivity = -1L;
+  private boolean overlayAdded;
 
   @Override
   protected void startUp() {
-    wsClient.registerMessage(PartnerSlayerNameUpdate.class);
-    wsClient.registerMessage(PartnerSlayerLocationUpdate.class);
     wsClient.registerMessage(PartnerSlayerKillsUpdate.class);
-
-    overlayManager.add(partnerSlayerOverlay);
+    wsClient.registerMessage(PartnerSlayerLocationUpdate.class);
+    wsClient.registerMessage(PartnerSlayerNameUpdate.class);
+    wsClient.registerMessage(PartnerSlayerXPUpdate.class);
 
     if (configManager.getRSProfileKey() != null) {
       load(configManager.getRSProfileKey());
@@ -113,13 +114,14 @@ public class PartnerSlayerPlugin extends Plugin {
 
   @Override
   protected void shutDown() {
-    overlayManager.remove(partnerSlayerOverlay);
+    removeOverlay();
 
     save();
 
-    wsClient.unregisterMessage(PartnerSlayerNameUpdate.class);
-    wsClient.unregisterMessage(PartnerSlayerLocationUpdate.class);
     wsClient.unregisterMessage(PartnerSlayerKillsUpdate.class);
+    wsClient.unregisterMessage(PartnerSlayerLocationUpdate.class);
+    wsClient.unregisterMessage(PartnerSlayerNameUpdate.class);
+    wsClient.unregisterMessage(PartnerSlayerXPUpdate.class);
   }
 
   private void save() {
@@ -215,7 +217,7 @@ public class PartnerSlayerPlugin extends Plugin {
 
   @Subscribe
   void onStatChanged(StatChanged statChanged) {
-    if (statChanged.getSkill() != Skill.SLAYER) {
+    if (statChanged.getSkill() != Skill.SLAYER || !isActive()) {
       return;
     }
 
@@ -300,6 +302,7 @@ public class PartnerSlayerPlugin extends Plugin {
       var matcher = partnerTaskPattern.matcher(chatMessage.getMessage());
       if (matcher.find()) {
         setPartnerName(matcher.group(1));
+        refreshTimeout();
         return;
       }
     }
@@ -386,6 +389,43 @@ public class PartnerSlayerPlugin extends Plugin {
   public void onGameTick(GameTick gameTick) {
     shareLocation();
     updateTask();
+
+    if (!slayerPluginService.getTargets().isEmpty()) {
+      refreshTimeout();
+    }
+
+    if (isActive()) {
+      addOverlay();
+    } else {
+      removeOverlay();
+    }
+  }
+
+  private boolean isActive() {
+    return System.currentTimeMillis() < getTimeoutAt();
+  }
+
+  private long getTimeoutAt() {
+    return lastActivity + 5 * 60 * 1000; // 5 minutes
+  }
+
+  private void addOverlay() {
+    if (!overlayAdded) {
+      overlayManager.add(partnerSlayerOverlay);
+      overlayAdded = true;
+    }
+  }
+
+  private void removeOverlay() {
+    if (overlayAdded) {
+      overlayManager.remove(partnerSlayerOverlay);
+      overlayAdded = false;
+    }
+  }
+
+  private void refreshTimeout() {
+    log.info("refreshTimeout");
+    lastActivity = System.currentTimeMillis();
   }
 
   private void joinParty() {
@@ -441,7 +481,7 @@ public class PartnerSlayerPlugin extends Plugin {
 
   @Subscribe
   public void onHitsplatApplied(HitsplatApplied hitsplatApplied) {
-    if (!(hitsplatApplied.getActor() instanceof NPC)) {
+    if (!(hitsplatApplied.getActor() instanceof NPC) || !isActive()) {
       return;
     }
 
@@ -459,7 +499,8 @@ public class PartnerSlayerPlugin extends Plugin {
   @Subscribe
   public void onActorDeath(ActorDeath actorDeath) {
     if (!(actorDeath.getActor() instanceof NPC)
-        || !slayerPluginService.getTargets().contains(actorDeath.getActor())) {
+        || !slayerPluginService.getTargets().contains(actorDeath.getActor())
+        || !isActive()) {
       return;
     }
 

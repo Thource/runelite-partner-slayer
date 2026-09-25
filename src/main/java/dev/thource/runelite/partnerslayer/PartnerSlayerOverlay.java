@@ -19,7 +19,7 @@ public class PartnerSlayerOverlay extends OverlayPanel {
   @Inject
   private PartnerSlayerOverlay(PartnerSlayerPlugin plugin) {
     super(plugin);
-    setPosition(OverlayPosition.TOP_LEFT);
+    setPosition(OverlayPosition.BOTTOM_LEFT);
     this.plugin = plugin;
     addMenuEntry(
         MenuAction.RUNELITE_OVERLAY_CONFIG,
