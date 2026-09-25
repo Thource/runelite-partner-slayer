@@ -32,11 +32,6 @@ public class PartnerSlayerOverlay extends OverlayPanel {
   @Override
   public Dimension render(Graphics2D graphics) {
     var slayerTask = plugin.getSlayerTask();
-    //    CookingSession session = plugin.getSession();
-    //    if (session == null)
-    //    {
-    //      return null;
-    //    }
 
     var taskInitialAmount = slayerTask == null ? -1 : slayerTask.getInitialAmount();
     var ownKills = slayerTask == null ? -1 : slayerTask.getOwnKills();
@@ -69,7 +64,12 @@ public class PartnerSlayerOverlay extends OverlayPanel {
         .add(
             LineComponent.builder()
                 .left("Task amount:")
-                .right(taskInitialAmount == -1 ? "-" : String.valueOf(taskInitialAmount))
+                .right(
+                    taskInitialAmount == -1
+                        ? "-"
+                        : plugin.getSlayerPluginService().getRemainingAmount()
+                            + " / "
+                            + taskInitialAmount)
                 .rightColor(Color.WHITE)
                 .build());
 
