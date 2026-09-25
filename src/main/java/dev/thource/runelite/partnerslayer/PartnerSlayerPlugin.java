@@ -52,7 +52,6 @@ import net.runelite.client.util.Text;
 
 /*
  * TODO:
- *  - Config options
  *  - Read slayer partner from "partner" option on slayer gem
  *  - Unset partnerName when no longer doing partner slayer
  */
@@ -406,7 +405,7 @@ public class PartnerSlayerPlugin extends Plugin {
   }
 
   private long getTimeoutAt() {
-    return lastActivity + 5 * 60 * 1000; // 5 minutes
+    return lastActivity + config.timeout() * 60 * 1000L;
   }
 
   private void addOverlay() {
