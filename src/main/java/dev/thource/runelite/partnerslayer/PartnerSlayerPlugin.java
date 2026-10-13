@@ -527,12 +527,12 @@ public class PartnerSlayerPlugin extends Plugin {
 
   @Subscribe
   public void onNpcSpawned(NpcSpawned npcSpawned) {
-    lastOwnPositiveHitsplatMap.remove(npcSpawned.getNpc().getId());
+    lastOwnPositiveHitsplatMap.remove(npcSpawned.getNpc().getIndex());
   }
 
   @Subscribe
   public void onNpcDespawned(NpcDespawned npcDespawned) {
-    lastOwnPositiveHitsplatMap.remove(npcDespawned.getNpc().getId());
+    lastOwnPositiveHitsplatMap.remove(npcDespawned.getNpc().getIndex());
   }
 
   @Subscribe
@@ -541,7 +541,7 @@ public class PartnerSlayerPlugin extends Plugin {
       return;
     }
 
-    var npcId = ((NPC) hitsplatApplied.getActor()).getId();
+    var npcId = ((NPC) hitsplatApplied.getActor()).getIndex();
     var hitsplat = hitsplatApplied.getHitsplat();
     if (hitsplat.getAmount() > 0) {
       if (hitsplat.isMine()) {
@@ -578,7 +578,7 @@ public class PartnerSlayerPlugin extends Plugin {
   }
 
   private boolean weKilledIt(NPC npc) {
-    return lastOwnPositiveHitsplatMap.contains(npc.getId());
+    return lastOwnPositiveHitsplatMap.contains(npc.getIndex());
   }
 
   @Subscribe
