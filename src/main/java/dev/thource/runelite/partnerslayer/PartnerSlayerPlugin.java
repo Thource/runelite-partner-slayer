@@ -18,6 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.MenuAction;
 import net.runelite.api.NPC;
 import net.runelite.api.Skill;
 import net.runelite.api.coords.WorldPoint;
@@ -27,6 +28,7 @@ import net.runelite.api.events.CommandExecuted;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.HitsplatApplied;
+import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.NpcDespawned;
 import net.runelite.api.events.NpcSpawned;
 import net.runelite.api.events.StatChanged;
@@ -62,7 +64,10 @@ import net.runelite.client.util.Text;
 @Slf4j
 @PluginDescriptor(
     name = "Partner Slayer",
-    description = "Enhances the experience of partner slayer.",
+    description =
+        "Designed to enhance the experience of partner slayer, this plugin tracks and displays you"
+            + " and your partner's kills for the current task, along with how many tiles your"
+            + " partner is away from you.",
     tags = {"partner", "slayer", "coop", "co-op"})
 @PluginDependency(SlayerPlugin.class)
 public class PartnerSlayerPlugin extends Plugin {
@@ -79,8 +84,8 @@ public class PartnerSlayerPlugin extends Plugin {
   @Getter @Inject private Client client;
   @Getter @Inject private ClientThread clientThread;
   @Inject private ConfigManager configManager;
-  @Getter @Inject private OverlayManager overlayManager;
-  @Getter @Inject private PartyService partyService;
+  @Inject private OverlayManager overlayManager;
+  @Inject private PartyService partyService;
   @Getter @Inject private SlayerPluginService slayerPluginService;
   @Inject private WSClient wsClient;
 
@@ -279,11 +284,6 @@ public class PartnerSlayerPlugin extends Plugin {
         || slayerTask.getTaskName() == null
         || !slayerTask.getTaskName().equals(slayerPluginService.getTask())) {
       if (slayerPluginService.getTask() != null) {
-        // Slayer task must have changed, reset it
-        log.info(
-            "Setting slayer task, task: {}, initialAmount: {}",
-            slayerPluginService.getTask(),
-            slayerPluginService.getInitialAmount());
         slayerTask =
             new SlayerTask(
                 slayerPluginService.getTask(), slayerPluginService.getInitialAmount(), 0, 0, 0, 0);
@@ -452,7 +452,6 @@ public class PartnerSlayerPlugin extends Plugin {
   }
 
   private void refreshTimeout() {
-    log.info("refreshTimeout");
     lastActivity = System.currentTimeMillis();
   }
 
@@ -471,26 +470,59 @@ public class PartnerSlayerPlugin extends Plugin {
       return;
     }
 
-    var partyPassword =
-        "PS-"
-            + Stream.of(partnerName, client.getLocalPlayer().getName())
-                .filter(Objects::nonNull)
-                .sorted(String::compareTo)
-                .collect(Collectors.joining("-"));
-
-    partyService.changeParty(partyPassword);
     client.addChatMessage(
         ChatMessageType.GAMEMESSAGE,
-        "",
-        "Partner Slayer has automatically created a party for you. Party password: "
-            + partyPassword,
+        "$PartnerSlayer",
+        "The Partner Slayer plugin requires you to be in a party to work.<br>"
+            + "Click this message to join party, password: "
+            + getPartyPassword(),
         null);
   }
 
+  private String getPartyPassword() {
+    if (partnerName == null
+        || client.getLocalPlayer() == null
+        || client.getLocalPlayer().getName() == null) {
+      return "";
+    }
+
+    return "ps-"
+        + Stream.of(partnerName, client.getLocalPlayer().getName())
+            .filter(Objects::nonNull)
+            .map(String::toLowerCase)
+            .sorted(String::compareTo)
+            .collect(Collectors.joining("-"));
+  }
+
+  @Subscribe(priority = -1)
+  public void onMenuEntryAdded(MenuEntryAdded menuEntryAdded) {
+    if (menuEntryAdded.getTarget().contains("$PartnerSlayer")) {
+      var menu = client.getMenu();
+      menu.removeMenuEntry(menuEntryAdded.getMenuEntry());
+
+      if (menuEntryAdded.getOption().equals("Report")) {
+        menu.createMenuEntry(-1)
+            .setOption("Join party")
+            .setTarget("<col=ffffff>" + getPartyPassword() + "</col>")
+            .setType(MenuAction.RUNELITE)
+            .onClick(
+                e -> {
+                  var passphrase = Text.removeTags(e.getTarget());
+                  if (!Objects.equals(partyService.getPartyPassphrase(), passphrase)) {
+                    partyService.changeParty(passphrase);
+                  }
+                });
+      }
+    }
+  }
+
   private void setPartnerName(String name) {
+    var nameChanged = !Objects.equals(partnerName, name);
     partnerName = name;
 
-    joinParty();
+    if (nameChanged) {
+      joinParty();
+    }
   }
 
   @Subscribe
@@ -551,14 +583,19 @@ public class PartnerSlayerPlugin extends Plugin {
 
   @Subscribe
   public void onPartyChanged(PartyChanged partyChanged) {
-    log.info("Party changed.");
     shareName();
     shareLocation();
+
+    if (partyChanged.getPassphrase().startsWith("ps-")) {
+      clientThread.invokeLater(
+          () ->
+              client.addChatMessage(
+                  ChatMessageType.GAMEMESSAGE, "", "Joined Partner Slayer party.", null));
+    }
   }
 
   @Subscribe
   public void onUserJoin(UserJoin userJoin) {
-    log.info("User {} has joined the party.", userJoin.getMemberId());
     shareName();
     shareLocation();
   }
@@ -566,8 +603,6 @@ public class PartnerSlayerPlugin extends Plugin {
   @Subscribe
   public void onUserPart(UserPart userPart) {
     if (userPart.getMemberId() == partnerMemberId) {
-      log.info("Partner {} has left the party.", partnerName);
-
       partnerMemberId = -1L;
       partnerWorldPoint = null;
     }
@@ -578,7 +613,6 @@ public class PartnerSlayerPlugin extends Plugin {
     var memberId = partnerSlayerNameUpdate.getMemberId();
     var name = partnerSlayerNameUpdate.getName();
 
-    log.info("Received name update from {}: {}", name, memberId);
     if (partnerMemberId != -1L || name == null || !name.equals(partnerName)) {
       return;
     }
