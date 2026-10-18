@@ -367,13 +367,16 @@ public class PartnerSlayerPlugin extends Plugin {
       return;
     }
 
-    WorldPoint location = client.getLocalPlayer().getWorldLocation();
-    if (location.equals(lastOwnWorldPoint)) {
-      return;
-    }
+    clientThread.invoke(
+        () -> {
+          WorldPoint location = client.getLocalPlayer().getWorldLocation();
+          if (location.equals(lastOwnWorldPoint)) {
+            return;
+          }
 
-    lastOwnWorldPoint = location;
-    partyService.send(new PartnerSlayerLocationUpdate(location));
+          lastOwnWorldPoint = location;
+          partyService.send(new PartnerSlayerLocationUpdate(location));
+        });
   }
 
   private void shareXp() {
